@@ -38,6 +38,8 @@ static void *extend_heap(size_t words);
 static void *coalesce(void *bp);
 static void *find_fit(size_t blocksize);
 static void place(void *bp, size_t blocksize);
+static void removeblock(node *bp);
+static void insert_available_block(node *bp);
 
 // @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@ 초기화 매크로 함수
 #define WSIZE 4 // header/footer 크기 = 1 word
@@ -82,20 +84,28 @@ static void place(void *bp, size_t blocksize);
  */
 // first_fit 정책을 위한 기준점 heap_listp
 static void *heap_listp;
-static char *find_brk;
+
+typedef struct NODE
+{
+    node *prev;
+    node *next;
+} node;
+
 int mm_init(void)
 {
 
-    if ((heap_listp = mem_sbrk(4 * WSIZE)) == (void *)-1)
+    if ((heap_listp = mem_sbrk(24)) == (void *)-1)
         return -1;
 
     PUT(heap_listp, 0);
-    PUT(heap_listp + (1 * WSIZE), PACK(DSIZE, 1));
-    PUT(heap_listp + (2 * WSIZE), PACK(DSIZE, 1));
-    PUT(heap_listp + (3 * WSIZE), PACK(0, 0x3));
+    PUT(heap_listp + (1 * WSIZE), PACK(2 * DSIZE, 1));
+    PUT(heap_listp + (2 * WSIZE), NULL); // 프롤로그 PRED 포인터 NULL로 초기화
+    PUT(heap_listp + (3 * WSIZE), NULL); // 프롤로그 SUCC 포인터 NULL로 초기화
+    PUT(heap_listp + (4 * WSIZE), PACK(2 * DSIZE, 1));
+    PUT(heap_listp + (5 * WSIZE), PACK(0, 0x3));
     // 할당기의 기준을 8의 배수에 맞춰줌.
     heap_listp += (2 * WSIZE);
-    find_brk = (char *)heap_listp + DSIZE;
+
     // extend_heap(1);
     if (extend_heap(CHUNKSIZE / WSIZE) == NULL)
         return -1;
@@ -121,6 +131,11 @@ static void *extend_heap(size_t words)
     PUT(HDRP(bp), PACK(size, a));
     // 풋터에도 마찬가지 > 1.헤더의 값을 읽고 나서 2.그만큼 이동 후 3. PACK을 해줌.
     PUT(FTRP(bp), PACK(size, a));
+
+    node *temp = bp;
+    temp->prev = (node *)PREV_BLKP(temp);
+    temp->prev->next = (node *)temp;
+
     // (에필로그) 삽입
     PUT(HDRP(NEXT_BLKP(bp)), PACK(0, 1));
 
@@ -137,7 +152,7 @@ static void *coalesce(void *bp)
     if (prev_alloc && next_alloc)
     {
         PUT(HDRP(bp), PACK(size, 0x2));
-        find_brk = bp;
+        insert_available_block(bp);
         return bp;
     }
     else if (prev_alloc && !next_alloc)
@@ -161,9 +176,16 @@ static void *coalesce(void *bp)
         PUT(FTRP(bp), PACK(size, 0x2));
     }
 
-    find_brk = bp;
+    insert_available_block(bp);
     return bp;
 }
+static void insert_available_block(node *bp)
+{
+    node *temp = heap_listp;
+    bp->next = temp->next;
+    bp->next->prev = bp;
+}
+
 /*
  * mm_malloc - Allocate a block by incrementing the brk pointer.
  *     Always allocate a block whose size is a multiple of the alignment.
@@ -195,31 +217,17 @@ void *mm_malloc(size_t size)
 }
 static void *find_fit(size_t blocksize)
 {
-    char *temp = find_brk;
+    node *temp = heap_listp;
+    temp = temp->next;
 
     while (GET_SIZE(HDRP(temp)) != 0)
     {
         if (GET_ALLOC(HDRP(temp)) == 0 && blocksize <= GET_SIZE(HDRP(temp)))
         {
-            find_brk = temp;
             return temp;
         }
-        temp = NEXT_BLKP(temp);
+        temp = temp->next;
     }
-
-    // If not found, search from the beginning of the heap to find_brk
-    temp = heap_listp + DSIZE;
-    while (temp < (char *)find_brk)
-    {
-        if (GET_ALLOC(HDRP(temp)) == 0 && blocksize <= GET_SIZE(HDRP(temp)))
-        {
-            find_brk = temp;
-            return temp;
-        }
-        temp = NEXT_BLKP(temp);
-    }
-
-    // If still not found, return NULL
     return NULL;
 }
 
